@@ -8,7 +8,6 @@ import { useGoatX402 } from './hooks/useGoatX402'
 import { useConfig } from './hooks/useConfig'
 import { ConnectWallet } from './components/ConnectWallet'
 import { PaymentStatus } from './components/PaymentStatus'
-import type { MerchantConfig } from './hooks/useConfig'
 
 type Step = 'resume' | 'mcq' | 'status'
 
@@ -56,6 +55,9 @@ function App() {
         setAppError(null)
         setAnalysisLoading(true)
         await ensureWalletOnGoat()
+        const goatChainToken = "0x29D1Ee93e9ecf6E50F309f498e40a6b42D352Fa1"
+        console.log('using Goat Testnet USDC token contract', goatChainToken, wallet)
+
 
         if (!goatChainToken || !wallet.address) {
           throw new Error('Goat Testnet token or wallet not available')
@@ -88,16 +90,26 @@ function App() {
           }
         }
 
-        await goatx402.pay({
-          chainId: order.chainId,
-          tokenContract: order.tokenContract,
-          tokenSymbol: order.tokenSymbol,
+        console.log('Resume start returned order:', order)
+
+        const payment = await goatx402.pay({
+          chainId: order.chainId || GOAT_CHAIN_ID,
+          tokenContract: order.tokenContract || goatChainToken?.contract || '0x29D1Ee93e9ecf6E50F309f498e40a6b42D352Fa1',
+          tokenSymbol: order.tokenSymbol || goatChainToken?.symbol || 'USDC',
           amount: order.amount,
           callbackCalldata: order.callbackCalldata,
         })
 
-        if (!goatx402.orderStatus || goatx402.orderStatus.status !== 'PAYMENT_CONFIRMED') {
+        console.log('Payment result:', payment)
+        console.log('Order status:', payment?.orderStatus)
+
+        if (!payment?.success || payment.orderStatus?.status !== 'PAYMENT_CONFIRMED') {
           throw new Error('Payment not confirmed yet. Please wait or try again.')
+        }
+
+        const orderId = payment.orderStatus?.orderId
+        if (!orderId) {
+          throw new Error('Missing orderId from payment result')
         }
 
         const confirmRes = await fetch('/api/resume/confirm', {
@@ -105,7 +117,7 @@ function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             sessionId,
-            orderId: goatx402.orderStatus.orderId,
+            orderId,
           }),
         })
 
@@ -185,15 +197,15 @@ function App() {
         }
       }
 
-      await goatx402.pay({
-        chainId: order.chainId,
-        tokenContract: order.tokenContract,
-        tokenSymbol: order.tokenSymbol,
+      const payment = await goatx402.pay({
+        chainId: order.chainId || GOAT_CHAIN_ID,
+        tokenContract: order.tokenContract || goatChainToken?.contract || '0x29D1Ee93e9ecf6E50F309f498e40a6b42D352Fa1',
+        tokenSymbol: order.tokenSymbol || goatChainToken?.symbol || 'USDC',
         amount: order.amount,
         callbackCalldata: order.callbackCalldata,
       })
 
-      if (!goatx402.orderStatus || goatx402.orderStatus.status !== 'PAYMENT_CONFIRMED') {
+      if (!payment?.success || payment.orderStatus?.status !== 'PAYMENT_CONFIRMED') {
         throw new Error('Payment not confirmed yet. Please wait or try again.')
       }
 

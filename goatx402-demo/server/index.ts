@@ -28,6 +28,14 @@ const goatx402Client = new GoatX402Client({
 // Merchant ID from environment
 const merchantId = process.env.GOATX402_MERCHANT_ID || 'demo_merchant'
 
+// Fallback Goat Testnet token (USDC) used when the merchant has no Goat Testnet token configured.
+// This makes the demo work even if the merchant isn't configured with a Goat Testnet token.
+const GOAT_TESTNET_USDC_TOKEN = {
+  chainId: 48816,
+  symbol: 'USDC',
+  tokenContract: '0x29D1Ee93e9ecf6E50F309f498e40a6b42D352Fa1',
+}
+
 // In-memory session store for demo purposes
 type Session = {
   id: string
@@ -96,6 +104,23 @@ app.get('/api/config', async (_req, res) => {
       })
     }
 
+    // Ensure Goat Testnet USDC is always available in demo mode.
+    // This avoids errors if merchant isn't configured with a Goat Testnet token.
+    if (!chains[GOAT_TESTNET_USDC_TOKEN.chainId]) {
+      chains[GOAT_TESTNET_USDC_TOKEN.chainId] = {
+        chainId: GOAT_TESTNET_USDC_TOKEN.chainId,
+        name: chainNames[GOAT_TESTNET_USDC_TOKEN.chainId] || `Chain ${GOAT_TESTNET_USDC_TOKEN.chainId}`,
+        tokens: [],
+      }
+    }
+    const goatChain = chains[GOAT_TESTNET_USDC_TOKEN.chainId]
+    if (!goatChain.tokens.some((t) => t.contract === GOAT_TESTNET_USDC_TOKEN.tokenContract)) {
+      goatChain.tokens.push({
+        symbol: GOAT_TESTNET_USDC_TOKEN.symbol,
+        contract: GOAT_TESTNET_USDC_TOKEN.tokenContract,
+      })
+    }
+
     res.json({
       merchantId: merchant.merchantId,
       merchantName: merchant.name,
@@ -138,8 +163,11 @@ app.post('/api/resume/start', upload.single('file'), async (req, res) => {
     sessions.set(sessionId, session)
 
     const goatMerchant = await goatx402Client.getMerchant(merchantId)
-    const goatToken = goatMerchant.supportedTokens.find((t) => t.chainId === 48816)
+    console.log('Merchant info:', goatMerchant)
+    const goatToken =
+      goatMerchant.supportedTokens.find((t) => t.chainId === 48816) || GOAT_TESTNET_USDC_TOKEN
     if (!goatToken) {
+      // This should never happen since we always have a fallback.
       return res.status(400).json({ error: 'No GOAT Testnet token configured for merchant' })
     }
 
@@ -149,7 +177,9 @@ app.post('/api/resume/start', upload.single('file'), async (req, res) => {
       tokenSymbol: goatToken.symbol,
       tokenContract: goatToken.tokenContract,
       fromAddress: walletAddress,
-      amountWei: '1000000',
+      // Amount in token's smallest units (USDC has 6 decimals).
+      // GoatX402 enforces a minimum amount, so we send 100000 (0.1 USDC).
+      amountWei: '100000',
     })
 
     res.json({
@@ -158,7 +188,7 @@ app.post('/api/resume/start', upload.single('file'), async (req, res) => {
         chainId: order.chainId,
         tokenSymbol: order.tokenSymbol,
         tokenContract: order.tokenContract,
-        amount: '1',
+        amount: '0.1',
         callbackCalldata: order.calldataSignRequest ? '0x' : undefined,
       },
     })
@@ -260,8 +290,10 @@ app.post('/api/status/start', async (req, res) => {
     }
 
     const goatMerchant = await goatx402Client.getMerchant(merchantId)
-    const goatToken = goatMerchant.supportedTokens.find((t) => t.chainId === 48816)
+    const goatToken =
+      goatMerchant.supportedTokens.find((t) => t.chainId === 48816) || GOAT_TESTNET_USDC_TOKEN
     if (!goatToken) {
+      // This should never happen since we always have a fallback.
       return res.status(400).json({ error: 'No GOAT Testnet token configured for merchant' })
     }
 
@@ -271,7 +303,9 @@ app.post('/api/status/start', async (req, res) => {
       tokenSymbol: goatToken.symbol,
       tokenContract: goatToken.tokenContract,
       fromAddress: session.walletAddress,
-      amountWei: '500000',
+      // Amount in token's smallest units (USDC has 6 decimals).
+      // GoatX402 enforces a minimum amount, so we send 100000 (0.1 USDC).
+      amountWei: '100000',
     })
 
     session.statusPaid = false
@@ -281,7 +315,7 @@ app.post('/api/status/start', async (req, res) => {
         chainId: order.chainId,
         tokenSymbol: order.tokenSymbol,
         tokenContract: order.tokenContract,
-        amount: '0.5',
+        amount: '0.000002',
         callbackCalldata: order.calldataSignRequest ? '0x' : undefined,
       },
     })
@@ -321,8 +355,19 @@ app.post('/api/orders', async (req, res) => {
     const { chainId, tokenSymbol, tokenContract, fromAddress, amountWei, callbackCalldata } =
       req.body
 
+    // Debug helper: log invalid request body when missing required fields
     if (!chainId || !tokenSymbol || !tokenContract || !fromAddress || !amountWei) {
-      return res.status(400).json({ error: 'Missing required fields' })
+      console.warn('Create order missing required fields:', req.body)
+      return res.status(400).json({
+        error: 'Missing required fields',
+        missing: {
+          chainId: !chainId,
+          tokenSymbol: !tokenSymbol,
+          tokenContract: !tokenContract,
+          fromAddress: !fromAddress,
+          amountWei: !amountWei,
+        },
+      })
     }
 
     const order = await goatx402Client.createOrder({

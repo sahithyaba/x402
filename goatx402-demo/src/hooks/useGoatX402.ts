@@ -5,13 +5,6 @@
  * and uses the frontend SDK for wallet interactions.
  */
 
-declare global {
-  interface Window {
-    ethereum?: {
-      request: (args: { method: string; params?: unknown[] }) => Promise<unknown>
-    }
-  }
-}
 
 import { useState, useCallback, useMemo } from 'react'
 import { ethers } from 'ethers'
@@ -101,6 +94,8 @@ export function useGoatX402(signer: ethers.Signer | null) {
       amountWei: string
       callbackCalldata?: string
     }): Promise<OrderResponse> => {
+      console.log('Creating order with params:', params)
+
       const response = await fetch(`${config.apiUrl}/orders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -109,7 +104,19 @@ export function useGoatX402(signer: ethers.Signer | null) {
 
       if (!response.ok) {
         const error = await response.json().catch(() => ({}))
-        throw new Error(error.error || `HTTP ${response.status}`)
+        console.error('Create order response error:', error)
+
+        let message = error.error ? `${error.error}` : `HTTP ${response.status}`
+        if (error.missing && typeof error.missing === 'object') {
+          const missingFields = Object.entries(error.missing)
+            .filter(([, isMissing]) => isMissing)
+            .map(([field]) => field)
+          if (missingFields.length > 0) {
+            message += ` (missing: ${missingFields.join(', ')})`
+          }
+        }
+
+        throw new Error(message)
       }
 
       return response.json()
@@ -175,7 +182,7 @@ export function useGoatX402(signer: ethers.Signer | null) {
 
   // Create order and execute payment
   const pay = useCallback(
-    async (params: PaymentParams) => {
+    async (params: PaymentParams): Promise<(PaymentResult & { orderStatus?: OrderProof }) | null> => {
       if (!paymentHelper || !signer) {
         setError('Wallet not connected')
         return null
@@ -291,11 +298,12 @@ export function useGoatX402(signer: ethers.Signer | null) {
         const result = await activePaymentHelper.pay(newOrder)
         setPaymentResult(result)
 
+        let finalStatus: OrderProof | undefined
         if (result.success) {
-          await pollForConfirmation(newOrder.orderId)
+          finalStatus = await pollForConfirmation(newOrder.orderId)
         }
 
-        return result
+        return { ...result, orderStatus: finalStatus }
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Payment failed'
         setError(message)
